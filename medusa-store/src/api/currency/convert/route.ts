@@ -1,9 +1,9 @@
 import { MedusaRequest, MedusaResponse } from "@medusajs/framework/http"
 import { z } from "zod"
+import { Modules } from "@medusajs/framework/utils"
+import { ICacheService } from "@medusajs/types"
 
-// In-memory cache: Currency -> { rates: Record<string, number>, timestamp: number }
-const ratesCache = new Map<string, { rates: Record<string, number>; timestamp: number }>()
-const CACHE_TTL = 60 * 60 * 1000 // 1 hour in milliseconds
+const CACHE_TTL = 60 * 60 // 1 hour in seconds (Redis uses seconds)
 
 const querySchema = z.object({
     amount: z.string().transform((val) => parseFloat(val)).refine((val) => !isNaN(val) && val >= 0, {
@@ -32,10 +32,13 @@ export async function GET(
         const { amount, from, to } = validatedQuery.data
 
         // 2. Check Cache
-        const now = Date.now()
-        let rates = ratesCache.get(from)
+        const cacheService: ICacheService = req.scope.resolve(Modules.CACHE)
+        const cacheKey = `currency_rates_${from}`
 
-        if (!rates || now - rates.timestamp > CACHE_TTL) {
+        let rates = await cacheService.get<{ rates: Record<string, number>; timestamp: number }>(cacheKey)
+        let cacheStatus = "miss"
+
+        if (!rates) {
             // 3. Fetch from External API
             try {
                 const response = await fetch(`https://open.er-api.com/v6/latest/${from}`)
@@ -52,9 +55,9 @@ export async function GET(
 
                 rates = {
                     rates: data.rates,
-                    timestamp: now,
+                    timestamp: Date.now(),
                 }
-                ratesCache.set(from, rates)
+                await cacheService.set(cacheKey, rates, CACHE_TTL)
             } catch (error) {
                 console.error("Currency conversion error:", error)
                 res.status(503).json({
@@ -62,6 +65,8 @@ export async function GET(
                 })
                 return
             }
+        } else {
+            cacheStatus = "hit"
         }
 
         // 4. Convert
@@ -82,7 +87,8 @@ export async function GET(
             amount,
             rate,
             convertedAmount,
-            cached: !!(ratesCache.get(from) && ratesCache.get(from)!.timestamp === rates.timestamp && now - rates.timestamp < CACHE_TTL), // Simple indicator if it was from cache logic (approx)
+            cached: !!(await cacheService.get(cacheKey)), // Simple indicator
+            cacheStatus,
         })
     } catch (error) {
         console.error("Unexpected error:", error)

@@ -11,14 +11,21 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
   medusa:
     build: .
     depends_on:
       - postgres
+      - redis
     ports:
       - "9000:9000"
     environment:
       DATABASE_URL: postgres://postgres:postgres_password@postgres:5432/medusa_store
+      REDIS_URL: redis://redis:6379
       STORE_CORS: http://localhost:8000
       ADMIN_CORS: http://localhost:7000,http://localhost:7001
       AUTH_CORS: http://localhost:8000,http://localhost:7000,http://localhost:7001
